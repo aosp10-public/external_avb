@@ -81,7 +81,15 @@ TEST_F(AvbSlotVerifyTest, Basic) {
       "androidboot.vbmeta.invalidate_on_error=yes "
       "androidboot.veritymode=enforcing",
       std::string(slot_data->cmdline));
+  uint8_t vbmeta_digest[AVB_SHA256_DIGEST_SIZE];
+  avb_slot_verify_data_calculate_vbmeta_digest(
+      slot_data, AVB_DIGEST_TYPE_SHA256, vbmeta_digest);
+  EXPECT_EQ("4161a7e655eabe16c3fe714de5d43736e7c0a190cf08d36c946d2509ce071e4d",
+            mem_to_hexstring(vbmeta_digest, AVB_SHA256_DIGEST_SIZE));
   avb_slot_verify_data_free(slot_data);
+
+  EXPECT_EQ("4161a7e655eabe16c3fe714de5d43736e7c0a190cf08d36c946d2509ce071e4d",
+            CalcVBMetaDigest("vbmeta_a.img", "sha256"));
 }
 
 TEST_F(AvbSlotVerifyTest, BasicSha512) {
@@ -115,7 +123,19 @@ TEST_F(AvbSlotVerifyTest, BasicSha512) {
       "androidboot.vbmeta.invalidate_on_error=yes "
       "androidboot.veritymode=enforcing",
       std::string(slot_data->cmdline));
+  uint8_t vbmeta_digest[AVB_SHA512_DIGEST_SIZE];
+  avb_slot_verify_data_calculate_vbmeta_digest(
+      slot_data, AVB_DIGEST_TYPE_SHA512, vbmeta_digest);
+  EXPECT_EQ(
+      "cb913d2f1a884f4e04c1db5bb181f3133fd16ac02fb367a20ef0776c0b07b3656ad1f081"
+      "e01932cf70f38b8960877470b448f1588dff022808387cc52fa77e77",
+      mem_to_hexstring(vbmeta_digest, AVB_SHA512_DIGEST_SIZE));
   avb_slot_verify_data_free(slot_data);
+
+  EXPECT_EQ(
+      "cb913d2f1a884f4e04c1db5bb181f3133fd16ac02fb367a20ef0776c0b07b3656ad1f081"
+      "e01932cf70f38b8960877470b448f1588dff022808387cc52fa77e77",
+      CalcVBMetaDigest("vbmeta_a.img", "sha512"));
 }
 
 TEST_F(AvbSlotVerifyTest, BasicUnlocked) {
@@ -499,6 +519,10 @@ TEST_F(AvbSlotVerifyTest, HashDescriptorInVBMeta) {
       "      Flags:                 0\n"
       "      Kernel Cmdline:        'cmdline in vbmeta "
       "$(ANDROID_BOOT_PARTUUID)'\n"
+      "    Kernel Cmdline descriptor:\n"
+      "      Flags:                 0\n"
+      "      Kernel Cmdline:        'cmdline in hash footer "
+      "$(ANDROID_SYSTEM_PARTUUID)'\n"
       "    Hash descriptor:\n"
       "      Image Size:            5242880 bytes\n"
       "      Hash Algorithm:        sha256\n"
@@ -506,11 +530,7 @@ TEST_F(AvbSlotVerifyTest, HashDescriptorInVBMeta) {
       "      Salt:                  deadbeef\n"
       "      Digest:                "
       "184cb36243adb8b87d2d8c4802de32125fe294ec46753d732144ee65df68a23d\n"
-      "      Flags:                 0\n"
-      "    Kernel Cmdline descriptor:\n"
-      "      Flags:                 0\n"
-      "      Kernel Cmdline:        'cmdline in hash footer "
-      "$(ANDROID_SYSTEM_PARTUUID)'\n",
+      "      Flags:                 0\n",
       InfoImage(vbmeta_image_path_));
 
   EXPECT_COMMAND(0,
@@ -567,7 +587,7 @@ TEST_F(AvbSlotVerifyTest, HashDescriptorInVBMeta) {
       "androidboot.vbmeta.device_state=locked "
       "androidboot.vbmeta.hash_alg=sha256 androidboot.vbmeta.size=1472 "
       "androidboot.vbmeta.digest="
-      "34cdb59b955aa35d4da97701f304fabf7392eecca8c50ff1a0b7b6e1c9aaa1b8 "
+      "99e84e34697a77414f0d7dd7896e98ac4da2d26bdd3756ef59ec79918de2adbe "
       "androidboot.vbmeta.invalidate_on_error=yes "
       "androidboot.veritymode=enforcing",
       std::string(slot_data->cmdline));
@@ -731,7 +751,7 @@ TEST_F(AvbSlotVerifyTest, HashDescriptorInVBMetaCorruptBoot) {
 TEST_F(AvbSlotVerifyTest, HashDescriptorInChainedPartition) {
   size_t boot_partition_size = 16 * 1024 * 1024;
   const size_t boot_image_size = 5 * 1024 * 1024;
-  base::FilePath boot_path = GenerateImage("boot_a.img", boot_image_size);
+  base::FilePath boot_path = GenerateImage("boot.img", boot_image_size);
   const char* requested_partitions[] = {"boot", NULL};
 
   EXPECT_COMMAND(0,
@@ -756,7 +776,7 @@ TEST_F(AvbSlotVerifyTest, HashDescriptorInChainedPartition) {
       pk_path.value().c_str());
 
   GenerateVBMetaImage(
-      "vbmeta_a.img",
+      "vbmeta.img",
       "SHA256_RSA2048",
       11,
       base::FilePath("test/data/testkey_rsa2048.pem"),
@@ -821,7 +841,7 @@ TEST_F(AvbSlotVerifyTest, HashDescriptorInChainedPartition) {
   EXPECT_EQ(AVB_SLOT_VERIFY_RESULT_OK,
             avb_slot_verify(ops_.avb_ops(),
                             requested_partitions,
-                            "_a",
+                            "",
                             AVB_SLOT_VERIFY_FLAGS_NONE,
                             AVB_HASHTREE_ERROR_MODE_RESTART_AND_INVALIDATE,
                             &slot_data));
@@ -884,7 +904,7 @@ TEST_F(AvbSlotVerifyTest, HashDescriptorInChainedPartition) {
   // This should match the two cmdlines with a space (U+0020) between them.
   EXPECT_EQ(
       "cmdline2 in hash footer cmdline2 in vbmeta "
-      "androidboot.vbmeta.device=PARTUUID=1234-fake-guid-for:vbmeta_a "
+      "androidboot.vbmeta.device=PARTUUID=1234-fake-guid-for:vbmeta "
       "androidboot.vbmeta.avb_version=1.1 "
       "androidboot.vbmeta.device_state=locked "
       "androidboot.vbmeta.hash_alg=sha256 androidboot.vbmeta.size=4416 "
@@ -898,7 +918,15 @@ TEST_F(AvbSlotVerifyTest, HashDescriptorInChainedPartition) {
   for (size_t n = 2; n < AVB_MAX_NUMBER_OF_ROLLBACK_INDEX_LOCATIONS; n++) {
     EXPECT_EQ(0UL, slot_data->rollback_indexes[n]);
   }
+  uint8_t vbmeta_digest[AVB_SHA256_DIGEST_SIZE];
+  avb_slot_verify_data_calculate_vbmeta_digest(
+      slot_data, AVB_DIGEST_TYPE_SHA256, vbmeta_digest);
+  EXPECT_EQ("4a45faa9adfeb94e9154fe682c11fef1a1a3d829b67cbf1a12ac7f0aa4f8e2e4",
+            mem_to_hexstring(vbmeta_digest, AVB_SHA256_DIGEST_SIZE));
   avb_slot_verify_data_free(slot_data);
+
+  EXPECT_EQ("4a45faa9adfeb94e9154fe682c11fef1a1a3d829b67cbf1a12ac7f0aa4f8e2e4",
+            CalcVBMetaDigest("vbmeta.img", "sha256"));
 }
 
 TEST_F(AvbSlotVerifyTest, HashDescriptorInChainedPartitionCorruptBoot) {
@@ -1286,20 +1314,20 @@ TEST_F(AvbSlotVerifyTest, PartitionsOtherThanBoot) {
       "Release String:           ''\n"
       "Descriptors:\n"
       "    Hash descriptor:\n"
-      "      Image Size:            5242880 bytes\n"
-      "      Hash Algorithm:        sha256\n"
-      "      Partition Name:        foo\n"
-      "      Salt:                  deadbeef\n"
-      "      Digest:                "
-      "184cb36243adb8b87d2d8c4802de32125fe294ec46753d732144ee65df68a23d\n"
-      "      Flags:                 0\n"
-      "    Hash descriptor:\n"
       "      Image Size:            10485760 bytes\n"
       "      Hash Algorithm:        sha256\n"
       "      Partition Name:        bar\n"
       "      Salt:                  deadbeef\n"
       "      Digest:                "
       "baea4bbd261d0edf4d1fe5e6e5a36976c291eeba66b6a46fa81dba691327a727\n"
+      "      Flags:                 0\n"
+      "    Hash descriptor:\n"
+      "      Image Size:            5242880 bytes\n"
+      "      Hash Algorithm:        sha256\n"
+      "      Partition Name:        foo\n"
+      "      Salt:                  deadbeef\n"
+      "      Digest:                "
+      "184cb36243adb8b87d2d8c4802de32125fe294ec46753d732144ee65df68a23d\n"
       "      Flags:                 0\n",
       InfoImage(vbmeta_image_path_));
 
@@ -1330,13 +1358,13 @@ TEST_F(AvbSlotVerifyTest, PartitionsOtherThanBoot) {
   // The 'foo' and 'bar' image data should match what is generated
   // above with GenerateImage().
   EXPECT_EQ(size_t(2), slot_data->num_loaded_partitions);
-  EXPECT_EQ("foo", std::string(slot_data->loaded_partitions[0].partition_name));
-  EXPECT_EQ(foo_image_size, slot_data->loaded_partitions[0].data_size);
+  EXPECT_EQ("bar", std::string(slot_data->loaded_partitions[0].partition_name));
+  EXPECT_EQ(bar_image_size, slot_data->loaded_partitions[0].data_size);
   for (size_t n = 0; n < slot_data->loaded_partitions[0].data_size; n++) {
     EXPECT_EQ(slot_data->loaded_partitions[0].data[n], uint8_t(n));
   }
-  EXPECT_EQ("bar", std::string(slot_data->loaded_partitions[1].partition_name));
-  EXPECT_EQ(bar_image_size, slot_data->loaded_partitions[1].data_size);
+  EXPECT_EQ("foo", std::string(slot_data->loaded_partitions[1].partition_name));
+  EXPECT_EQ(foo_image_size, slot_data->loaded_partitions[1].data_size);
   for (size_t n = 0; n < slot_data->loaded_partitions[1].data_size; n++) {
     EXPECT_EQ(slot_data->loaded_partitions[1].data[n], uint8_t(n));
   }
@@ -1399,20 +1427,20 @@ TEST_F(AvbSlotVerifyTest, OnlyLoadWhatHasBeenRequested) {
       "Release String:           ''\n"
       "Descriptors:\n"
       "    Hash descriptor:\n"
-      "      Image Size:            5242880 bytes\n"
-      "      Hash Algorithm:        sha256\n"
-      "      Partition Name:        foo\n"
-      "      Salt:                  deadbeef\n"
-      "      Digest:                "
-      "184cb36243adb8b87d2d8c4802de32125fe294ec46753d732144ee65df68a23d\n"
-      "      Flags:                 0\n"
-      "    Hash descriptor:\n"
       "      Image Size:            10485760 bytes\n"
       "      Hash Algorithm:        sha256\n"
       "      Partition Name:        bar\n"
       "      Salt:                  deadbeef\n"
       "      Digest:                "
       "baea4bbd261d0edf4d1fe5e6e5a36976c291eeba66b6a46fa81dba691327a727\n"
+      "      Flags:                 0\n"
+      "    Hash descriptor:\n"
+      "      Image Size:            5242880 bytes\n"
+      "      Hash Algorithm:        sha256\n"
+      "      Partition Name:        foo\n"
+      "      Salt:                  deadbeef\n"
+      "      Digest:                "
+      "184cb36243adb8b87d2d8c4802de32125fe294ec46753d732144ee65df68a23d\n"
       "      Flags:                 0\n",
       InfoImage(vbmeta_image_path_));
 
@@ -2071,21 +2099,6 @@ TEST_F(AvbSlotVerifyTest, NoVBMetaPartition) {
       "'root=PARTUUID=$(ANDROID_SYSTEM_PARTUUID)'\n"
       "    Hashtree descriptor:\n"
       "      Version of dm-verity:  1\n"
-      "      Image Size:            16777216 bytes\n"
-      "      Tree Offset:           16777216\n"
-      "      Tree Size:             135168 bytes\n"
-      "      Data Block Size:       4096 bytes\n"
-      "      Hash Block Size:       4096 bytes\n"
-      "      FEC num roots:         0\n"
-      "      FEC offset:            0\n"
-      "      FEC size:              0 bytes\n"
-      "      Hash Algorithm:        sha1\n"
-      "      Partition Name:        system\n"
-      "      Salt:                  d00df00d\n"
-      "      Root Digest:           c9ffc3bfae5000269a55a56621547fd1fcf819df\n"
-      "      Flags:                 0\n"
-      "    Hashtree descriptor:\n"
-      "      Version of dm-verity:  1\n"
       "      Image Size:            8388608 bytes\n"
       "      Tree Offset:           8388608\n"
       "      Tree Size:             69632 bytes\n"
@@ -2098,6 +2111,21 @@ TEST_F(AvbSlotVerifyTest, NoVBMetaPartition) {
       "      Partition Name:        foobar\n"
       "      Salt:                  d00df00d\n"
       "      Root Digest:           d52d93c988d336a79abe1c05240ae9a79a9b7d61\n"
+      "      Flags:                 0\n"
+      "    Hashtree descriptor:\n"
+      "      Version of dm-verity:  1\n"
+      "      Image Size:            16777216 bytes\n"
+      "      Tree Offset:           16777216\n"
+      "      Tree Size:             135168 bytes\n"
+      "      Data Block Size:       4096 bytes\n"
+      "      Hash Block Size:       4096 bytes\n"
+      "      FEC num roots:         0\n"
+      "      FEC offset:            0\n"
+      "      FEC size:              0 bytes\n"
+      "      Hash Algorithm:        sha1\n"
+      "      Partition Name:        system\n"
+      "      Salt:                  d00df00d\n"
+      "      Root Digest:           c9ffc3bfae5000269a55a56621547fd1fcf819df\n"
       "      Flags:                 0\n",
       InfoImage(boot_path));
 
@@ -2130,7 +2158,7 @@ TEST_F(AvbSlotVerifyTest, NoVBMetaPartition) {
       "androidboot.vbmeta.device_state=locked "
       "androidboot.vbmeta.hash_alg=sha256 androidboot.vbmeta.size=5312 "
       "androidboot.vbmeta.digest="
-      "6b06719a940e5d8fa53ffef91eb4f0517ff0dda9833b90be1c9624ab3a5261d2 "
+      "b297d90aa92a5d49725d1206ff1301b054c5a0214f1cb2fc12b809b317d943e4 "
       "androidboot.vbmeta.invalidate_on_error=yes "
       "androidboot.veritymode=enforcing",
       std::string(slot_data->cmdline));
@@ -2547,6 +2575,11 @@ class AvbSlotVerifyTestWithPersistentDigest : public AvbSlotVerifyTest {
                                  "Flags:                    0\n"
                                  "Release String:           ''\n"
                                  "Descriptors:\n"
+                                 "    Kernel Cmdline descriptor:\n"
+                                 "      Flags:                 0\n"
+                                 "      Kernel Cmdline:        "
+                                 "'androidboot.vbmeta.root_digest.factory=$("
+                                 "AVB_FACTORY_ROOT_DIGEST)'\n"
                                  "    Hashtree descriptor:\n"
                                  "      Version of dm-verity:  1\n"
                                  "      Image Size:            5242880 bytes\n"
@@ -2561,12 +2594,7 @@ class AvbSlotVerifyTestWithPersistentDigest : public AvbSlotVerifyTest {
                                  "      Partition Name:        factory\n"
                                  "      Salt:                  deadbeef\n"
                                  "      Root Digest:           \n"
-                                 "      Flags:                 %d\n"
-                                 "    Kernel Cmdline descriptor:\n"
-                                 "      Flags:                 0\n"
-                                 "      Kernel Cmdline:        "
-                                 "'androidboot.vbmeta.root_digest.factory=$("
-                                 "AVB_FACTORY_ROOT_DIGEST)'\n",
+                                 "      Flags:                 %d\n",
                                  expected_tree_size,
                                  expected_fec_offset,
                                  verity_hash_algorithm_.c_str(),
@@ -2643,6 +2671,12 @@ TEST_F(AvbSlotVerifyTestWithPersistentDigest, Basic_WithAB) {
   Verify(false /* expect_success */);
 }
 
+TEST_F(AvbSlotVerifyTestWithPersistentDigest, Basic_WithAutoInit) {
+  SetupWithHashDescriptor();
+  // Explicitly do not write any digest as a persistent value.
+  Verify(true /* expect_success */);
+}
+
 class AvbSlotVerifyTestWithPersistentDigest_InvalidDigestLength
     : public AvbSlotVerifyTestWithPersistentDigest,
       public ::testing::WithParamInterface<size_t> {};
@@ -2665,7 +2699,18 @@ INSTANTIATE_TEST_CASE_P(
 
 class AvbSlotVerifyTestWithPersistentDigest_InvalidPersistentValueName
     : public AvbSlotVerifyTestWithPersistentDigest,
-      public ::testing::WithParamInterface<const char*> {};
+      public ::testing::WithParamInterface<const char*> {
+  // FakeAvbOpsDelegate override.
+  AvbIOResult write_persistent_value(const char* name,
+                                     size_t value_size,
+                                     const uint8_t* value) override {
+    // Fail attempted initialization with any name not under test.
+    if (std::string(name) != GetParam()) {
+      return AVB_IO_RESULT_ERROR_NO_SUCH_VALUE;
+    }
+    return ops_.write_persistent_value(name, value_size, value);
+  }
+};
 
 TEST_P(AvbSlotVerifyTestWithPersistentDigest_InvalidPersistentValueName,
        Param) {
@@ -2680,26 +2725,30 @@ INSTANTIATE_TEST_CASE_P(
     AvbSlotVerifyTestWithPersistentDigest_InvalidPersistentValueName,
     ::testing::Values(
         "",
-        "AVBPD_factory0",
-        "AVBPD_factor",
+        "avb.persistent_digest.factory0",
+        "avb.persistent_digest.factor",
         "loooooooooooooooooooooooooooooooooooooooooooooongvalue"));
 
 class AvbSlotVerifyTestWithPersistentDigest_ReadDigestFailure
     : public AvbSlotVerifyTestWithPersistentDigest,
       public ::testing::WithParamInterface<AvbIOResult> {
-  // FakeAvbOpsDelegate override.
+  // FakeAvbOpsDelegate overrides.
   AvbIOResult read_persistent_value(const char* name,
                                     size_t buffer_size,
                                     uint8_t* out_buffer,
                                     size_t* out_num_bytes_read) override {
     return GetParam();
   }
+  AvbIOResult write_persistent_value(const char* name,
+                                     size_t value_size,
+                                     const uint8_t* value) override {
+    // Fail any attempted initialization in response to the read error.
+    return GetParam();
+  }
 };
 
 TEST_P(AvbSlotVerifyTestWithPersistentDigest_ReadDigestFailure, Param) {
   SetupWithHashDescriptor();
-  ops_.write_persistent_value(
-      kPersistentValueName, AVB_SHA256_DIGEST_SIZE, kDigest);
   switch (GetParam()) {
     case AVB_IO_RESULT_ERROR_OOM:
       expected_error_code_ = AVB_SLOT_VERIFY_RESULT_ERROR_OOM;
@@ -2746,7 +2795,7 @@ TEST_F(AvbSlotVerifyTestWithPersistentDigest, Basic_Hashtree_Sha1) {
       "androidboot.vbmeta.hash_alg=sha256 "
       "androidboot.vbmeta.size=1408 "
       "androidboot.vbmeta.digest="
-      "bdeff592f85f34a6ae40919e311273a10027f3877daa9c8c1be8e685947abb3d "
+      "0bf73ed205a043d410277444a49cc5643c1046f53b3b942cdc2c16fea06acd7b "
       "androidboot.vbmeta.invalidate_on_error=yes "
       "androidboot.veritymode=enforcing",
       last_cmdline_);
@@ -2773,7 +2822,7 @@ TEST_F(AvbSlotVerifyTestWithPersistentDigest, Basic_Hashtree_Sha256) {
       "androidboot.vbmeta.hash_alg=sha256 "
       "androidboot.vbmeta.size=1408 "
       "androidboot.vbmeta.digest="
-      "03d287a0a126ed3fce48d6d8907612559e1485d29e201ede5838d65c5cc4bec2 "
+      "7d64315450f035f4ff93560403c46de5a7e2a0ddfc84b95bd69f7ed5654aa687 "
       "androidboot.vbmeta.invalidate_on_error=yes "
       "androidboot.veritymode=enforcing",
       last_cmdline_);
@@ -2804,7 +2853,7 @@ TEST_F(AvbSlotVerifyTestWithPersistentDigest, Basic_Hashtree_Sha512) {
       "androidboot.vbmeta.hash_alg=sha256 "
       "androidboot.vbmeta.size=1408 "
       "androidboot.vbmeta.digest="
-      "931b10c7c8e7ab270437a4481b7d8d5c9757a3df190b7df3b6f93bf0289b9911 "
+      "097d002a75d1e89557b662b6db3f1ebffb8419a02e79792a97b2c4fd1c8bedc4 "
       "androidboot.vbmeta.invalidate_on_error=yes "
       "androidboot.veritymode=enforcing",
       last_cmdline_);
@@ -2819,6 +2868,13 @@ TEST_F(AvbSlotVerifyTestWithPersistentDigest, Basic_Hashtree_WithAB) {
                         0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA};
   ops_.write_persistent_value(
       kPersistentValueName, AVB_SHA1_DIGEST_SIZE, fake_digest);
+  Verify(false /* expect_success */);
+}
+
+TEST_F(AvbSlotVerifyTestWithPersistentDigest, Basic_Hashtree_NoAutoInit) {
+  verity_hash_algorithm_ = "sha1";
+  SetupWithHashtreeDescriptor();
+  // Explicitly do not store any persistent digest.
   Verify(false /* expect_success */);
 }
 

@@ -133,9 +133,25 @@ static AvbSlotVerifyResult load_full_partition(AvbOps* ops,
   return AVB_SLOT_VERIFY_RESULT_OK;
 }
 
+/* Reads a persistent digest stored as a named persistent value corresponding to
+ * the given |part_name|. The value is returned in |out_digest| which must point
+ * to |expected_digest_size| bytes. If there is no digest stored for |part_name|
+ * it can be initialized by providing a non-NULL |initial_digest| of length
+ * |expected_digest_size|. The |initial_digest| may be NULL.
+ *
+ * Returns AVB_SLOT_VERIFY_RESULT_OK on success, otherwise returns an
+ * AVB_SLOT_VERIFY_RESULT_ERROR_* error code.
+ *
+ * If the value does not exist, is not supported, or is not populated, and
+ * |initial_digest| is NULL, returns
+ * AVB_SLOT_VERIFY_RESULT_ERROR_INVALID_METADATA. If |expected_digest_size| does
+ * not match the stored digest size, also returns
+ * AVB_SLOT_VERIFY_RESULT_ERROR_INVALID_METADATA.
+ */
 static AvbSlotVerifyResult read_persistent_digest(AvbOps* ops,
                                                   const char* part_name,
                                                   size_t expected_digest_size,
+                                                  const uint8_t* initial_digest,
                                                   uint8_t* out_digest) {
   char* persistent_value_name = NULL;
   AvbIOResult io_ret = AVB_IO_RESULT_OK;
@@ -155,6 +171,19 @@ static AvbSlotVerifyResult read_persistent_digest(AvbOps* ops,
                                       expected_digest_size,
                                       out_digest,
                                       &stored_digest_size);
+  if (io_ret == AVB_IO_RESULT_ERROR_NO_SUCH_VALUE && initial_digest) {
+    avb_debugv(part_name,
+               ": Digest does not exist, initializing persistent digest.\n",
+               NULL);
+    stored_digest_size = expected_digest_size;
+    io_ret = ops->write_persistent_value(
+        ops, persistent_value_name, expected_digest_size, initial_digest);
+    if (io_ret == AVB_IO_RESULT_OK) {
+      avb_memcpy(out_digest, initial_digest, expected_digest_size);
+    } else {
+      avb_errorv(part_name, ": Error initializing persistent digest.\n", NULL);
+    }
+  }
   avb_free(persistent_value_name);
   if (io_ret == AVB_IO_RESULT_ERROR_OOM) {
     return AVB_SLOT_VERIFY_RESULT_ERROR_OOM;
@@ -314,18 +343,21 @@ static AvbSlotVerifyResult load_and_verify_hash_partition(
   }
 
   if (hash_desc.digest_len == 0) {
-    // Expect a match to a persistent digest.
+    /* Expect a match to a persistent digest. */
     avb_debugv(part_name, ": No digest, using persistent digest.\n", NULL);
     expected_digest_len = digest_len;
     expected_digest = expected_digest_buf;
     avb_assert(expected_digest_len <= sizeof(expected_digest_buf));
-    ret =
-        read_persistent_digest(ops, part_name, digest_len, expected_digest_buf);
+    /* Pass |digest| as the |initial_digest| so devices not yet initialized get
+     * initialized to the current partition digest.
+     */
+    ret = read_persistent_digest(
+        ops, part_name, digest_len, digest, expected_digest_buf);
     if (ret != AVB_SLOT_VERIFY_RESULT_OK) {
       goto out;
     }
   } else {
-    // Expect a match to the digest in the descriptor.
+    /* Expect a match to the digest in the descriptor. */
     expected_digest_len = hash_desc.digest_len;
     expected_digest = desc_digest;
   }
@@ -1038,7 +1070,11 @@ static AvbSlotVerifyResult load_and_verify_vbmeta(
             goto out;
           }
 
-          ret = read_persistent_digest(ops, part_name, digest_len, digest_buf);
+          ret = read_persistent_digest(ops,
+                                       part_name,
+                                       digest_len,
+                                       NULL /* initial_digest */,
+                                       digest_buf);
           if (ret != AVB_SLOT_VERIFY_RESULT_OK) {
             goto out;
           }
@@ -1343,4 +1379,43 @@ const char* avb_slot_verify_result_to_string(AvbSlotVerifyResult result) {
   }
 
   return ret;
+}
+
+void avb_slot_verify_data_calculate_vbmeta_digest(AvbSlotVerifyData* data,
+                                                  AvbDigestType digest_type,
+                                                  uint8_t* out_digest) {
+  bool ret = false;
+  size_t n;
+
+  switch (digest_type) {
+    case AVB_DIGEST_TYPE_SHA256: {
+      AvbSHA256Ctx ctx;
+      avb_sha256_init(&ctx);
+      for (n = 0; n < data->num_vbmeta_images; n++) {
+        avb_sha256_update(&ctx,
+                          data->vbmeta_images[n].vbmeta_data,
+                          data->vbmeta_images[n].vbmeta_size);
+      }
+      avb_memcpy(out_digest, avb_sha256_final(&ctx), AVB_SHA256_DIGEST_SIZE);
+      ret = true;
+    } break;
+
+    case AVB_DIGEST_TYPE_SHA512: {
+      AvbSHA512Ctx ctx;
+      avb_sha512_init(&ctx);
+      for (n = 0; n < data->num_vbmeta_images; n++) {
+        avb_sha512_update(&ctx,
+                          data->vbmeta_images[n].vbmeta_data,
+                          data->vbmeta_images[n].vbmeta_size);
+      }
+      avb_memcpy(out_digest, avb_sha512_final(&ctx), AVB_SHA512_DIGEST_SIZE);
+      ret = true;
+    } break;
+
+      /* Do not add a 'default:' case here because of -Wswitch. */
+  }
+
+  if (!ret) {
+    avb_fatal("Unknown digest type");
+  }
 }
